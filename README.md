@@ -31,10 +31,13 @@ Delovni tok poteka takole:
 
 
 **2\. Shema v DuckDB**
+
 ![DuckDB Schema](documentation/screenshots/duckdb_schema.png)
+
 Slika 1 Rezultat ukaza SHOW TABLES; vDuckDB, ki prikazuje vse dimenzijske in dejstvene tabele ter pogledfact\_with\_dim.
 
 **3\. Vzorčne vrstice iz fact\_with\_dim**
+
 ![Sample Query](documentation/screenshots/sample_query_results.png)
 
-Slika 2 Primer 5 vrstic iz združenegapogleda fact\_with\_dim, ki prikazuje atribute dimenzij in mere dejstev.
+Slika 2 Primer 5 vrstic iz združenega pogleda fact_with_dim, ki prikazuje atribute dimenzij in mere dejstev.
