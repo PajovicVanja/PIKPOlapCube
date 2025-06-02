@@ -1,17 +1,18 @@
-# mysql_to_duckdb.py
+# scripts/mysql_to_duckdb.py
 #
 # This script:
 #  1) Connects to MySQL and pulls your eight dwpikp tables into pandas DataFrames.
 #  2) Writes those DataFrames into a DuckDB database (dwpikp.duckdb).
 #  3) Creates a star‐schema view `fact_with_dim` (including kupec_id for KPI 3).
-#  4) Computes three KPIs (with the research‐question breakdowns):
+#  4) Computes three KPIs (with their research‐question breakdowns):
 #       KPI 1: Avg spend per transaction (overall, by discount, by new/returning)
 #       KPI 2: Conversion rate (overall, by discount, by year/month)
-#       KPI 3: % of e‐commerce customers by age group & gender.
-#  5) Saves three matplotlib charts:
+#       KPI 3: % of e-commerce customers by education level (izobrazba)
+#  5) Saves three (actually four) matplotlib charts:
 #       • KPI1 ⇒ kpi1_avg_spend_by_discount.png
 #       • KPI2 ⇒ kpi2_conversion_rate_over_time.png
-#       • KPI3 ⇒ kpi3_pct_by_age.png   (drops any NULL age‐group)
+#       • KPI3 ⇒ kpi3_pct_by_education.png          (drops any NULL izobrazba)
+#       • KPI3 ⇒ kpi3_pct_by_education_filled.png   (fills NULL with “Nepojasnjena izobrazba”)
 #
 import os
 import duckdb
@@ -19,15 +20,17 @@ import pandas as pd
 import mysql.connector
 import matplotlib.pyplot as plt
 
-MYSQL_HOST     = "localhost"
-MYSQL_PORT     = 3306
-MYSQL_USER     = "root"
-MYSQL_PASSWORD = "nekipass123"
-MYSQL_DATABASE = "dwpikp"
+# --- CONFIGURE THESE VARIABLES ---
+MYSQL_HOST     = "localhost"        # or your MySQL server IP/hostname
+MYSQL_PORT     = 3306               # default MySQL port
+MYSQL_USER     = "root"             # your MySQL user
+MYSQL_PASSWORD = "nekipass123"      # your MySQL password
+MYSQL_DATABASE = "dwpikp"           # your schema name
 
 PROJECT_ROOT   = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DUCKDB_PATH    = os.path.join(PROJECT_ROOT, "duckdb_database", "dwpikp.duckdb")
 
+# Ensure the duckdb_database folder exists
 os.makedirs(os.path.dirname(DUCKDB_PATH), exist_ok=True)
 
 
@@ -108,7 +111,7 @@ SELECT
   i.Kategorija                                  AS kategorija,
   i.Cena                                        AS cena_izdelek,
   p.popustUporabljen                            AS popust_uporabljen,          -- 'Yes' / 'No'
-  s.izobrazbenaRaven                            AS izobrazba,
+  s.izobrazbenaRaven                            AS izobrazba,                  -- education level
   s.zaposlitveniStatus                          AS zaposlitveni_status,
   d.spol                                        AS spol,                       -- 'Moski', 'Zenski', 'Skupno'
   d.starostnaSkupina                            AS starostna_skupina,          -- e.g. 'Od 18 do 24 let', etc.
@@ -166,7 +169,7 @@ kpi1_by_customer_type = duck_conn.execute("""
   FROM fact_with_dim
   GROUP BY kupec_status;
 """).df()
-print("\nKPI 1 – Povprečna poraba: Nov vs Vračajoč:")
+print("\nKPI 1 – Povprečna poraba: Nov vs. Vračajoč:")
 print(kpi1_by_customer_type)
 
 
@@ -204,69 +207,41 @@ print(kpi2_by_time)
 
 
 # -----------------------------------------------------
-# KPI 3: Delež e-trgovinskih kupcev glede na starost in spol
+# KPI 3: Delež e-trgovinskih kupcev glede na izobrazbo
 # -----------------------------------------------------
+# (We will ignore starostna_skupina for KPI 3 and use izobrazba instead.)
 
-# 4g) Total distinct customers
+# 4g) Total distinct customers for denominator
 total_customers = duck_conn.execute("""
-  SELECT COUNT(DISTINCT kupec_id) FROM fact_with_dim;
+  SELECT COUNT(DISTINCT kupec_id) 
+  FROM fact_with_dim;
 """).fetchone()[0]
 
-# 4h) Percentage by age group (starostna_skupina)
-kpi3_by_age = duck_conn.execute(f"""
+# 4h) Percentage by education level (izobrazba)
+kpi3_by_education = duck_conn.execute(f"""
   WITH unique_customers AS (
-    SELECT DISTINCT kupec_id, starostna_skupina
+    SELECT DISTINCT kupec_id, izobrazba
     FROM fact_with_dim
   )
   SELECT
-    starostna_skupina,
+    izobrazba,
     100.0 * COUNT(*) / {total_customers} AS pct_of_customers
   FROM unique_customers
-  GROUP BY starostna_skupina
-  ORDER BY starostna_skupina;
+  GROUP BY izobrazba
+  ORDER BY izobrazba;
 """).df()
-print(f"\nKPI 3 – Delež kupcev po starostnih skupinah (skupno kupcev = {total_customers}):")
-print(kpi3_by_age)
+print(f"\nKPI 3 – Delež kupcev po izobrazbeni ravni (skupno kupcev = {total_customers}):")
+print(kpi3_by_education)
 
-# 4i) Percentage by gender (spol)
-kpi3_by_gender = duck_conn.execute(f"""
-  WITH unique_customers AS (
-    SELECT DISTINCT kupec_id, spol
-    FROM fact_with_dim
-  )
-  SELECT
-    spol,
-    100.0 * COUNT(*) / {total_customers} AS pct_of_customers
-  FROM unique_customers
-  GROUP BY spol
-  ORDER BY spol;
-""").df()
-print("\nKPI 3 – Delež kupcev po spolu:")
-print(kpi3_by_gender)
 
-# 4j) Percentage by (age + gender) combined
-kpi3_by_age_gender = duck_conn.execute(f"""
-  WITH unique_customers AS (
-    SELECT DISTINCT kupec_id, starostna_skupina, spol
-    FROM fact_with_dim
-  )
-  SELECT
-    starostna_skupina,
-    spol,
-    100.0 * COUNT(*) / {total_customers} AS pct_of_customers
-  FROM unique_customers
-  GROUP BY starostna_skupina, spol
-  ORDER BY starostna_skupina, spol;
-""").df()
-print("\nKPI 3 – Delež kupcev po starostni skupini in spolu:")
-print(kpi3_by_age_gender)
 
 
 # -----------------------------------------------------------------------------
 # 5) VISUALIZATIONS (MATPLOTLIB)
 #     – KPI 1 chart (bar): kpi1_avg_spend_by_discount.png
 #     – KPI 2 chart (line): kpi2_conversion_rate_over_time.png
-#     – KPI 3 chart (bar): kpi3_pct_by_age.png (drops any NULL age‐group)
+#     – KPI 3 chart (bar): kpi3_pct_by_education.png (drop NULL izobrazba)
+#     – KPI 3 chart (bar): kpi3_pct_by_education_filled.png (fill NULL with "Nepojasnjena izobrazba")
 # -----------------------------------------------------------------------------
 
 screenshots_dir = os.path.join(PROJECT_ROOT, "documentation", "screenshots")
@@ -288,7 +263,7 @@ print(f"\nSaved KPI 1 chart → {out_kpi1}")
 plt.close()
 
 # 5b) KPI 2: Conversion rate over time (Year + Month)
-plt.figure(figsize=(8,5))
+plt.figure(figsize=(8, 5))
 for year in kpi2_by_time["leto"].unique():
     subset = kpi2_by_time[kpi2_by_time["leto"] == year]
     plt.plot(
@@ -308,42 +283,25 @@ plt.savefig(out_kpi2, dpi=150, bbox_inches="tight")
 print(f"Saved KPI 2 chart → {out_kpi2}\n")
 plt.close()
 
-# 5c) KPI 3: Percentage of customers by age group (drop NULL)
-#
-df_kpi3_age = kpi3_by_age.dropna(subset=["starostna_skupina", "pct_of_customers"])
+# 5c) KPI 3: Percentage of customers by education level (drop NULL)
+df_kpi3_edu = kpi3_by_education.dropna(subset=["izobrazba", "pct_of_customers"])
 
-plt.figure(figsize=(8,5))
+plt.figure(figsize=(8, 5))
 plt.bar(
-    df_kpi3_age["starostna_skupina"].astype(str),
-    df_kpi3_age["pct_of_customers"]
+    df_kpi3_edu["izobrazba"].astype(str),
+    df_kpi3_edu["pct_of_customers"]
 )
-plt.title("KPI 3: Delež e-trgovinskih kupcev po starostni skupini")
-plt.xlabel("Starostna skupina")
+plt.title("KPI 3: Delež e-trgovinskih kupcev po izobrazbeni ravni")
+plt.xlabel("Izobrazbena raven")
 plt.ylabel("Delež kupcev (%)")
 plt.xticks(rotation=45, ha="right")
 plt.grid(axis="y", linestyle="--", alpha=0.5)
-out_kpi3_age = os.path.join(screenshots_dir, "kpi3_pct_by_age.png")
-plt.savefig(out_kpi3_age, dpi=150, bbox_inches="tight")
-print(f"Saved KPI 3 chart (by age, dropping NULL) → {out_kpi3_age}")
+out_kpi3_edu = os.path.join(screenshots_dir, "kpi3_pct_by_education.png")
+plt.savefig(out_kpi3_edu, dpi=150, bbox_inches="tight")
+print(f"Saved KPI 3 chart (by education, dropping NULL) → {out_kpi3_edu}")
 plt.close()
 
 
-
-df_kpi3_age_filled = kpi3_by_age.fillna({"starostna_skupina": "Nepojasnjena starost"})
-plt.figure(figsize=(8,5))
-plt.bar(
-    df_kpi3_age_filled["starostna_skupina"].astype(str),
-    df_kpi3_age_filled["pct_of_customers"]
-)
-plt.title("KPI 3: Delež e-trgovinskih kupcev po starostni skupini")
-plt.xlabel("Starostna skupina")
-plt.ylabel("Delež kupcev (%)")
-plt.xticks(rotation=45, ha="right")
-plt.grid(axis="y", linestyle="--", alpha=0.5)
-out_kpi3_age2 = os.path.join(screenshots_dir, "kpi3_pct_by_age_filled.png")
-plt.savefig(out_kpi3_age2, dpi=150, bbox_inches="tight")
-print(f"Saved KPI 3 chart (by age, renamed NULL) → {out_kpi3_age2}")
-plt.close()
 
 duck_conn.close()
 print("\n▶ Done. DuckDB file is at:", DUCKDB_PATH)
